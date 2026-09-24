@@ -58,6 +58,33 @@ are more costly than extra proposals. The default checkpoint is
 `models/grape_yolo11s_best.pt`. These are research results, not safety
 validation for autonomous harvesting.
 
+### Small-object crop-aware result
+
+The follow-up YOLO11s experiment trains on a 50/50 mixture of full VINEPICs
+training images and native-resolution 640x640 crops. Validation and test remain
+the original session-separated images. Crop annotations are clipped and
+renormalized; partial objects are retained only when their centre belongs to
+the crop and at least 50% of the original box remains visible.
+
+| Test strategy (IoU 0.50) | Confidence | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|
+| Previous YOLO11s, full image | 0.375 | 0.684 | 0.492 | 0.572 |
+| Crop-aware YOLO11s, tiled 640 | 0.500 | **0.674** | **0.538** | **0.598** |
+| Crop-aware YOLO11s, tiled 640, high recall | 0.250 | 0.502 | **0.601** | 0.547 |
+
+The balanced 0.50 threshold was selected on validation, not the test. The
+Gradio demo now defaults to `models/grape_yolo11s_small_objects_best.pt` with
+tiled mode enabled. Disable tiled mode for faster inference, or lower confidence
+to 0.25 when missed clusters are more costly than false proposals.
+
+Rebuild the generated crop dataset and reproduce training with:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.build_small_object_dataset
+.\.venv\Scripts\python.exe -m src.validate_dataset --dataset data\small_object_dataset --output results\small_object_dataset_checks
+.\.venv\Scripts\python.exe -m src.train_detector --data data\small_object_dataset\dataset.yaml --model yolo11s.pt --epochs 50 --imgsz 640 --batch -1 --small-object-augmentations --name grape_yolo11s_small_objects
+```
+
 ## WGISD + CANOPIES experiment
 
 Two public datasets were downloaded and integrated without modifying their
