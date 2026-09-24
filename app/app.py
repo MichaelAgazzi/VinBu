@@ -29,11 +29,12 @@ from src.config import (  # noqa: E402
     DEFAULT_IMGSZ,
     DEFAULT_IOU_THRESHOLD,
     DEFAULT_TRAINED_MODEL,
+    MULTISCALE_TRAINED_MODEL,
     REVIEWED_DETECTIONS_FILE,
     ReviewStatus,
     SMALL_OBJECT_TRAINED_MODEL,
 )
-from src.tiled_inference import predict_tiled  # noqa: E402
+from src.tiled_inference import classless_nms, predict_tiled  # noqa: E402
 
 
 @lru_cache(maxsize=2)
@@ -50,7 +51,7 @@ def load_model(path: str):
     return model
 
 
-def run_detection(image_path: str, conf: float, tiled: bool, model_path: str):
+def run_detection(image_path: str, conf: float, tiled: bool, ensemble: bool, model_path: str):
     if not image_path:
         raise gr.Error("Upload or select an image first.")
     model = load_model(model_path)
@@ -59,7 +60,24 @@ def run_detection(image_path: str, conf: float, tiled: bool, model_path: str):
         raise gr.Error(f"Could not read image: {image_path}")
     identifier = Path(image_path).name
     device = select_device("auto")
-    if tiled:
+    if ensemble:
+        started = time.perf_counter()
+        large_model = load_model(str(MULTISCALE_TRAINED_MODEL.resolve()))
+        predictions = classless_nms(
+            predict_tiled(
+                model, bgr, conf=conf, imgsz=640, device=device,
+                tile_size=640, overlap=0.25, nms_iou=0.50,
+            )
+            + predict_tiled(
+                large_model, bgr, conf=conf, imgsz=960, device=device,
+                tile_size=640, overlap=0.25, nms_iou=0.50,
+            ),
+            0.50,
+        )
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        detections = predictions_to_detections(predictions, identifier)
+        mode = "YOLO11s+YOLO11m tiled ensemble"
+    elif tiled:
         started = time.perf_counter()
         predictions = predict_tiled(
             model, bgr, conf=conf, imgsz=DEFAULT_IMGSZ, device=device,
@@ -138,6 +156,10 @@ def build_demo(model_path: str) -> gr.Blocks:
                     value=True,
                     label="Small-object tiled mode (better recall, slower)",
                 )
+                ensemble = gr.Checkbox(
+                    value=False,
+                    label="High-accuracy ensemble (best F1, much slower; use confidence 0.60)",
+                )
                 detect_button = gr.Button("Detect grape clusters", variant="primary")
             output = gr.Image(type="numpy", label="Detected grape clusters")
         if examples:
@@ -161,8 +183,10 @@ def build_demo(model_path: str) -> gr.Blocks:
         review_message = gr.Markdown()
 
         detect_button.click(
-            fn=lambda image, conf, use_tiles: run_detection(image, conf, use_tiles, model_path),
-            inputs=[source, confidence, tiled],
+            fn=lambda image, conf, use_tiles, use_ensemble: run_detection(
+                image, conf, use_tiles, use_ensemble, model_path
+            ),
+            inputs=[source, confidence, tiled, ensemble],
             outputs=[output, summary, table, current, detection_id],
         )
         save_button.click(

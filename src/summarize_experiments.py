@@ -90,6 +90,7 @@ def main() -> None:
         "YOLO11n external + FT": "finetuned_on_vinepics_test",
         "YOLO11s VINEPICs": "grape_yolo11s_vinepics_test",
         "YOLO11s crop-aware (full)": "grape_yolo11s_small_objects_vinepics_test",
+        "YOLO11m multiscale 960 (full)": "grape_yolo11m_multiscale_960_vinepics_test",
     }
     target_rows = []
     for model_name, run_name in target_runs.items():
@@ -128,6 +129,8 @@ def main() -> None:
         "Crop-aware full\nconf .25": "yolo11s_small_objects_vinepics_test",
         "Crop+tiled balanced\nconf .50": "yolo11s_small_objects_tiled640_calibrated",
         "Crop+tiled high recall\nconf .25": "yolo11s_small_objects_tiled640",
+        "YOLO11m full 960\nconf .35": "yolo11m_multiscale_full960_calibrated",
+        "YOLO11m tiled 640\nconf .575": "yolo11m_multiscale_tiled640_calibrated",
     }
     strategy_rows = []
     predictions_root = EVALUATION_DIR.parent / "test_predictions"
@@ -140,6 +143,17 @@ def main() -> None:
             "strategy": strategy.replace("\n", " "), "precision": precision, "recall": recall,
             "f1": 2 * precision * recall / (precision + recall),
         })
+    strategy_labels = list(strategy_runs)
+    ensemble = json.loads(
+        (EVALUATION_DIR.parent / "ensemble/yolo11s_yolo11m_tiled640_test/summary.json")
+        .read_text(encoding="utf-8")
+    )["best"]
+    strategy_rows.append({
+        "strategy": "YOLO11s+YOLO11m ensemble conf .60/.60",
+        "precision": ensemble["precision"], "recall": ensemble["recall"],
+        "f1": ensemble["f1"],
+    })
+    strategy_labels.append("YOLO11s+YOLO11m\nensemble .60/.60")
     strategy_csv = EVALUATION_DIR / "small_object_strategy_comparison.csv"
     with strategy_csv.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=("strategy", "precision", "recall", "f1"))
@@ -147,7 +161,7 @@ def main() -> None:
         writer.writerows(strategy_rows)
     x = np.arange(len(strategy_rows))
     width = 0.24
-    fig, ax = plt.subplots(figsize=(13, 6))
+    fig, ax = plt.subplots(figsize=(16, 6))
     for offset, (metric, colour) in enumerate(
         (("precision", "#264653"), ("recall", "#E76F51"), ("f1", "#2A9D8F"))
     ):
@@ -156,7 +170,7 @@ def main() -> None:
             label=metric.capitalize(), color=colour,
         )
         ax.bar_label(bars, fmt="%.3f", fontsize=8, rotation=90, padding=2)
-    ax.set_xticks(x, strategy_runs)
+    ax.set_xticks(x, strategy_labels)
     ax.set_ylim(0, 0.82)
     ax.set_ylabel("Score at IoU 0.50")
     ax.set_title("Held-out VINEPICs: small-object inference strategies")

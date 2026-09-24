@@ -23,7 +23,7 @@ from src.config import DATASET_DIR, PROJECT_ROOT, RANDOM_SEED
 from src.tiled_inference import tile_origins
 
 
-DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "small_object_dataset"
+DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "small_object_multiscale_dataset"
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
 
@@ -115,13 +115,17 @@ def write_label(path: Path, lines: list[str]) -> None:
 
 
 def build_dataset(
-    source: Path, output: Path, tile_size: int, overlap: float, crops_per_image: int,
-    full_copies: int, seed: int,
+    source: Path, output: Path, tile_sizes: list[int], overlap: float,
+    crops_per_size: int, full_variants: int, seed: int,
 ) -> dict:
     if output.resolve() == source.resolve() or output.resolve().parent != (PROJECT_ROOT / "data").resolve():
         raise ValueError(f"Output must be a generated child of project data/: {output}")
     if output.exists():
         shutil.rmtree(output)
+    if not tile_sizes or any(size < 64 for size in tile_sizes):
+        raise ValueError("tile_sizes must contain values >= 64")
+    if crops_per_size < 1 or full_variants < 1:
+        raise ValueError("crops_per_size and full_variants must be positive")
     manifest: list[dict] = []
     counts: Counter = Counter()
 
@@ -145,42 +149,63 @@ def build_dataset(
         height, width = image.shape[:2]
         boxes = load_pixel_boxes(label_path, width, height)
 
-        for copy_index in range(full_copies):
-            stem = f"full{copy_index}_{image_path.stem}"
-            destination = output / "images" / "train" / f"{stem}{image_path.suffix.lower()}"
-            mode = materialize(image_path, destination)
+        for variant_index in range(full_variants):
+            stem = f"full{variant_index}_{image_path.stem}"
+            if variant_index == 0:
+                destination = output / "images" / "train" / f"{stem}{image_path.suffix.lower()}"
+                mode = materialize(image_path, destination)
+                augmentation = "none"
+            else:
+                augmented, augmentation = augment_photometric(
+                    image, f"full:{image_path.stem}:{variant_index}", seed,
+                )
+                destination = output / "images" / "train" / f"{stem}.jpg"
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if not cv2.imwrite(str(destination), augmented, [cv2.IMWRITE_JPEG_QUALITY, 95]):
+                    raise OSError(f"Could not write {destination}")
+                mode = "generated"
             write_label(output / "labels" / "train" / f"{stem}.txt", label_lines)
             manifest.append({"prepared": destination.name, "source": image_path.name,
-                             "kind": "full", "augmentation": "online", "boxes": len(boxes)})
+                             "kind": "full", "augmentation": augmentation, "boxes": len(boxes),
+                             "tile_size": ""})
             counts[f"full_{mode}"] += 1
 
-        candidates = []
-        for y0 in tile_origins(height, tile_size, overlap):
-            for x0 in tile_origins(width, tile_size, overlap):
-                crop_width, crop_height = min(tile_size, width - x0), min(tile_size, height - y0)
-                lines = boxes_for_crop(boxes, x0, y0, crop_width, crop_height, tile_size)
-                score = crop_score(lines, boxes, width * height)
-                candidates.append((score, len(lines), -y0, -x0, x0, y0, crop_width, crop_height, lines))
-        candidates.sort(reverse=True)
-        for crop_index, candidate in enumerate(candidates[:crops_per_image]):
-            _, _, _, _, x0, y0, crop_width, crop_height, lines = candidate
-            crop = image[y0:y0 + crop_height, x0:x0 + crop_width]
-            canvas = np.full((tile_size, tile_size, 3), 114, dtype=np.uint8)
-            canvas[:crop_height, :crop_width] = crop
-            augmentation = "none"
-            if crop_index % 2 == 1:
-                canvas, augmentation = augment_photometric(canvas, f"{image_path.stem}:{crop_index}", seed)
-            stem = f"crop{crop_index}_{image_path.stem}_x{x0}_y{y0}"
-            destination = output / "images" / "train" / f"{stem}.jpg"
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if not cv2.imwrite(str(destination), canvas, [cv2.IMWRITE_JPEG_QUALITY, 95]):
-                raise OSError(f"Could not write {destination}")
-            write_label(output / "labels" / "train" / f"{stem}.txt", lines)
-            manifest.append({"prepared": destination.name, "source": image_path.name,
-                             "kind": "crop", "augmentation": augmentation, "boxes": len(lines),
-                             "x": x0, "y": y0})
-            counts["crop_images"] += 1
-            counts["crop_boxes"] += len(lines)
+        crop_index = 0
+        for tile_size in tile_sizes:
+            candidates = []
+            for y0 in tile_origins(height, tile_size, overlap):
+                for x0 in tile_origins(width, tile_size, overlap):
+                    crop_width, crop_height = min(tile_size, width - x0), min(tile_size, height - y0)
+                    lines = boxes_for_crop(boxes, x0, y0, crop_width, crop_height, tile_size)
+                    score = crop_score(lines, boxes, width * height)
+                    candidates.append(
+                        (score, len(lines), -y0, -x0, x0, y0, crop_width, crop_height, lines)
+                    )
+            candidates.sort(reverse=True)
+            for candidate in candidates[:crops_per_size]:
+                _, _, _, _, x0, y0, crop_width, crop_height, lines = candidate
+                crop = image[y0:y0 + crop_height, x0:x0 + crop_width]
+                canvas = np.full((tile_size, tile_size, 3), 114, dtype=np.uint8)
+                canvas[:crop_height, :crop_width] = crop
+                augmentation = "none"
+                if crop_index % 2 == 1:
+                    canvas, augmentation = augment_photometric(
+                        canvas, f"crop:{image_path.stem}:{tile_size}:{crop_index}", seed,
+                    )
+                stem = f"crop{crop_index}_s{tile_size}_{image_path.stem}_x{x0}_y{y0}"
+                destination = output / "images" / "train" / f"{stem}.jpg"
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if not cv2.imwrite(str(destination), canvas, [cv2.IMWRITE_JPEG_QUALITY, 95]):
+                    raise OSError(f"Could not write {destination}")
+                write_label(output / "labels" / "train" / f"{stem}.txt", lines)
+                manifest.append({"prepared": destination.name, "source": image_path.name,
+                                 "kind": "crop", "augmentation": augmentation,
+                                 "boxes": len(lines), "x": x0, "y": y0,
+                                 "tile_size": tile_size})
+                counts["crop_images"] += 1
+                counts["crop_boxes"] += len(lines)
+                counts[f"crop_{tile_size}"] += 1
+                crop_index += 1
 
     output.mkdir(parents=True, exist_ok=True)
     (output / "dataset.yaml").write_text(
@@ -189,14 +214,16 @@ def build_dataset(
         "names:\n  0: grape_cluster\n", encoding="utf-8",
     )
     with (output / "manifest.csv").open("w", newline="", encoding="utf-8") as handle:
-        fieldnames = ["prepared", "source", "kind", "augmentation", "boxes", "x", "y"]
+        fieldnames = [
+            "prepared", "source", "kind", "augmentation", "boxes", "x", "y", "tile_size"
+        ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in manifest:
             writer.writerow({key: row.get(key, "") for key in fieldnames})
     summary = {
-        "source": str(source.resolve()), "output": str(output.resolve()), "tile_size": tile_size,
-        "overlap": overlap, "crops_per_image": crops_per_image, "full_copies": full_copies,
+        "source": str(source.resolve()), "output": str(output.resolve()), "tile_sizes": tile_sizes,
+        "overlap": overlap, "crops_per_size": crops_per_size, "full_variants": full_variants,
         "seed": seed, **counts,
     }
     summary["train_images"] = len(manifest)
@@ -209,10 +236,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=DATASET_DIR)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--tile-size", type=int, default=640)
+    parser.add_argument("--tile-sizes", type=int, nargs="+", default=[512, 640, 768])
     parser.add_argument("--overlap", type=float, default=0.25)
-    parser.add_argument("--crops-per-image", type=int, default=2)
-    parser.add_argument("--full-copies", type=int, default=2)
+    parser.add_argument("--crops-per-size", type=int, default=1)
+    parser.add_argument("--full-variants", type=int, default=3)
     parser.add_argument("--seed", type=int, default=RANDOM_SEED)
     args = parser.parse_args()
     print(json.dumps(build_dataset(**vars(args)), indent=2))

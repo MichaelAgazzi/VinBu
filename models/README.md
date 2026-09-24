@@ -24,5 +24,12 @@ F1 0.598 on the original held-out test. The Gradio demo uses this checkpoint
 and inference mode by default. Confidence 0.25 is the high-recall setting
 (recall 0.601, precision 0.502).
 
+`grape_yolo11m_multiscale_960_b4_best.pt` uses a larger YOLO11m backbone,
+960-pixel training, and 512/640/768-pixel crops. On the original test its
+full-image mAP50/mAP50-95 are 0.485/0.277. Combined with the crop-aware YOLO11s
+as a tiled ensemble at validation-selected confidence 0.60 for both models, it
+reaches precision 0.659, recall 0.567, and F1 0.609. Keep YOLO11s as the fast
+default; use the ensemble when recall matters more than latency.
+
 Training automatically copies the best checkpoint from its Ultralytics run
 directory into this folder.

@@ -78,6 +78,24 @@ Updated: 2026-09-24
 - High-recall tiled operation at confidence 0.25 achieved 143 TP and 95 FN:
   P 0.502, R 0.601. The demo now exposes tiled mode and uses it by default.
 
+### YOLO11m multiscale experiment
+
+- Replaced identical full-image copies with real deterministic photometric
+  variants and generated balanced 512/640/768-pixel crops: 1,014 training
+  images, 4,274 crop boxes, original validation/test unchanged, 0 invalid rows.
+- YOLO11m trained at 960 px with batch 4. Early stopping completed at epoch 45;
+  the best epoch 30 validation result was P 0.749, R 0.589, mAP50 0.679, and
+  mAP50-95 0.363.
+- Original full-image test: P 0.671, R 0.508, mAP50 0.485, mAP50-95 0.277.
+- YOLO11m tiled alone did not beat the existing operational F1 and was not
+  promoted as the default.
+- A two-model tiled ensemble, calibrated on validation at confidence 0.60 for
+  both networks, achieved 135 TP, 70 FP, and 103 FN on the original test:
+  P 0.659, R 0.567, F1 0.609. This is the best balanced F1 so far, at the cost
+  of roughly doubling inference work.
+- Tiled AP evaluation was added. On test, YOLO11m tiled reached AP50 0.541 and
+  AP50-95 0.297; YOLO11s tiled remained slightly higher at 0.551 and 0.310.
+
 - Starting architecture: Ultralytics YOLO11n (`yolo11n.pt`).
 - Training status: **complete**, 50 epochs at 640 px, automatically selected
   batch size 14, seed 42, CUDA device 0. Runtime was about five minutes.

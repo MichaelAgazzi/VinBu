@@ -23,6 +23,7 @@ REVIEWED_DETECTIONS_FILE = RESULTS_DIR / "reviewed_detections.json"
 DEFAULT_MODEL = "yolo11n.pt"
 DEFAULT_TRAINED_MODEL = MODELS_DIR / "grape_yolo11s_best.pt"
 SMALL_OBJECT_TRAINED_MODEL = MODELS_DIR / "grape_yolo11s_small_objects_best.pt"
+MULTISCALE_TRAINED_MODEL = MODELS_DIR / "grape_yolo11m_multiscale_960_b4_best.pt"
 DEFAULT_EPOCHS = 50
 DEFAULT_IMGSZ = 640
 DEFAULT_BATCH = -1

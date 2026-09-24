@@ -5,12 +5,14 @@ __pycache__/
 models/*.pt
 yolo11n.pt
 yolo11s.pt
+yolo11m.pt
 weights/
 *.cache
 results/
 data/external/
 data/combined_dataset/
 data/small_object_dataset/
+data/small_object_multiscale_dataset/
 data/yolo_dataset/
 VINEPICs/
 *.zip

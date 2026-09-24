@@ -77,12 +77,37 @@ Gradio demo now defaults to `models/grape_yolo11s_small_objects_best.pt` with
 tiled mode enabled. Disable tiled mode for faster inference, or lower confidence
 to 0.25 when missed clusters are more costly than false proposals.
 
-Rebuild the generated crop dataset and reproduce training with:
+The legacy checkpoint and its generated dataset are retained locally. The
+current dataset builder now produces the improved multiscale version below.
+
+### YOLO11m multiscale and ensemble result
+
+The next experiment removes identical full-image copies and builds 1,014
+training samples: 50% full frames (one original plus two deterministic
+photometric variants) and 50% native-resolution crops at 512, 640, and 768 px.
+YOLO11m was trained at 960 px and stopped after 45 epochs; validation selected
+epoch 30.
+
+On the untouched test, full-image YOLO11m improved mAP50 from 0.472 to 0.485
+and mAP50-95 from 0.260 to 0.277. Its tiled fixed-threshold F1 did not beat the
+existing YOLO11s. A validation-calibrated tiled ensemble of the two models did:
+
+| Test strategy (IoU 0.50) | Precision | Recall | F1 |
+|---|---:|---:|---:|
+| YOLO11s tiled | **0.674** | 0.538 | 0.598 |
+| YOLO11m tiled | 0.661 | 0.500 | 0.569 |
+| YOLO11s + YOLO11m ensemble | 0.659 | **0.567** | **0.609** |
+
+The ensemble thresholds are 0.60/0.60, selected only on validation. It is
+available as an optional high-accuracy mode in the app, but is not the default
+because it runs both networks and is substantially slower.
+
+Reproduce the multiscale experiment with:
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.build_small_object_dataset
-.\.venv\Scripts\python.exe -m src.validate_dataset --dataset data\small_object_dataset --output results\small_object_dataset_checks
-.\.venv\Scripts\python.exe -m src.train_detector --data data\small_object_dataset\dataset.yaml --model yolo11s.pt --epochs 50 --imgsz 640 --batch -1 --small-object-augmentations --name grape_yolo11s_small_objects
+.\.venv\Scripts\python.exe -m src.validate_dataset --dataset data\small_object_multiscale_dataset --output results\small_object_multiscale_dataset_checks
+.\.venv\Scripts\python.exe -m src.train_detector --data data\small_object_multiscale_dataset\dataset.yaml --model yolo11m.pt --epochs 60 --imgsz 960 --batch 4 --small-object-augmentations --name grape_yolo11m_multiscale_960_b4
 ```
 
 ## WGISD + CANOPIES experiment
