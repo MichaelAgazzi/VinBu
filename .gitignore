@@ -6,6 +6,8 @@ models/*.pt
 yolo11n.pt
 yolo11s.pt
 yolo11m.pt
+yolo11s-seg.pt
+yolo26m-seg.pt
 weights/
 *.cache
 results/
@@ -14,6 +16,7 @@ data/combined_dataset/
 data/small_object_dataset/
 data/small_object_multiscale_dataset/
 data/yolo_dataset/
+data/canopies_peduncle/
 VINEPICs/
 *.zip
 *.pdf

@@ -125,10 +125,65 @@ Updated: 2026-09-24
 - A 20-epoch target fine-tune was evaluated and rejected for deployment: it did
   not improve VINEPICs and catastrophically forgot CANOPIES.
 
+### Cluster and peduncle segmentation pipeline
+
+- Converted CANOPIES VIA polygons into leakage-safe full-image and cluster-ROI
+  YOLO segmentation datasets. Complete capture sequences remain isolated across
+  the 60/20/20 train/validation/test split; both generated datasets validate
+  with zero malformed or out-of-frame labels.
+- Trained YOLO11s-seg on 593 training ROIs with thin-mask resolution preserved
+  (`mask_ratio=2`) and targeted photometric/geometric augmentation. Early
+  stopping selected epoch 59 of the 69 completed epochs.
+- Held-out ground-truth ROI test: mask P 0.627, R 0.574, mAP50 0.582, and
+  mAP50-95 0.175. At the confidence 0.35 operating point selected only on
+  validation: P 0.637, R 0.521, F1 0.573 at mask IoU 0.50.
+- The two-stage deployment path detects clusters, builds enlarged ROIs,
+  segments the most plausible peduncle, and estimates a visible cutting point.
+  On all 174 held-out full images it obtained cluster-box P/R/F1
+  0.683/0.727/0.705 and end-to-end peduncle-mask P/R/F1
+  0.505/0.442/0.471 at IoU 0.50.
+- Batched second-stage GPU latency is 40.8 ms mean and 40.5 ms median per full
+  image after warm-up on the RTX 5060 Laptop. A dedicated Gradio interface and
+  JSON export are available for inspection and downstream robot integration.
+
+### YOLO26m high-accuracy peduncle experiment
+
+- Added leakage-safe multiscale training: 1,058 train images containing full
+  frames and cluster-centred crops, while validation/test remain untouched
+  full frames from disjoint acquisition sequences.
+- Fine-tuned COCO-pretrained YOLO26m-seg at 768 px with thin-mask resolution,
+  vineyard illumination augmentation, AdamW, and cosine learning rate.
+- Averaging the epoch-63 and epoch-72 EMA checkpoints (weights 0.4/0.6)
+  improved validation mask mAP50 from 0.623 to 0.643 and mAP50-95 from 0.330
+  to 0.339 at 768 px without extra inference cost. At 960 px these became
+  0.659 and 0.347.
+- A full-frame low-LR fine-tune was evaluated and rejected because it reduced
+  validation mask mAP50 to 0.628 and mAP50-95 to 0.329 at 960 px.
+- Transferred the learned representation to the single-class ROI task and
+  trained with `mask_ratio=1`. On the untouched ROI test the new model reached
+  mask P/R/F1 0.718/0.571/0.636 at validation-selected confidence 0.36,
+  mAP50 0.658, and mAP50-95 0.202. The previous YOLO11s result was
+  F1 0.573, mAP50 0.582, and mAP50-95 0.175.
+- The direct two-class model, calibrated only on validation at cluster/peduncle
+  confidence 0.40/0.20, obtained full-image cluster P/R/F1
+  0.824/0.775/0.799 and associated-peduncle P/R/F1
+  0.673/0.477/0.558 on all 174 test images. Mean latency excluding warm-up was
+  44.3 ms/image. Its independent test confidence sweep reached overall mask
+  mAP50 0.755 and mAP50-95 0.388; per-class mask AP50 was 0.838 for clusters
+  and 0.673 for peduncles. This is now the recommended full-image path.
+- The newer ROI model in the legacy two-stage path improved end-to-end
+  peduncle F1 only from 0.471 to 0.476; the direct model is therefore preferred.
+- The published CANOPIES RGB Mask R-CNN reports overall mAP 0.654 and
+  peduncle AP 0.771 at IoU 0.50, but used a different 1,326-image dataset and a
+  random 75/20/5 split. The public release here has 810 images and a stricter
+  sequence-disjoint 60/20/20 split, so numeric values are not a valid direct
+  SOTA comparison.
+
 ## Known limitations
 
-- Bounding-box detection is implemented; segmentation masks are retained only in
-  the original COCO annotations for future work.
+- Peduncle segmentation currently uses only 2D RGB. The proposed cutting point
+  requires depth, collision/clearance checks, and task-level validation before
+  it can command a robot.
 - Human review is stored as JSON but does not yet convert edits into new labels.
 - The explicit split prevents session leakage but is necessarily coarse because
   there are only 18 sessions.

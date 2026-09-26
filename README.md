@@ -5,8 +5,10 @@ Challenge: detect every visible grape bunch in an RGB vineyard image, draw a
 bounding box and confidence score, export machine-readable detections, and
 prepare each result for human approval or rejection.
 
-Only grape-cluster object detection is implemented. Robot control, navigation,
-cutting, depth localization, and manipulation are intentionally out of scope.
+The repository now includes grape-cluster detection, grape-cluster/peduncle
+instance segmentation, geometric association, and a 2D cutting-point proposal.
+Robot control, navigation, metric depth localization, and manipulation remain
+out of scope.
 
 ## Current dataset status
 
@@ -101,6 +103,118 @@ existing YOLO11s. A validation-calibrated tiled ensemble of the two models did:
 The ensemble thresholds are 0.60/0.60, selected only on validation. It is
 available as an optional high-accuracy mode in the app, but is not the default
 because it runs both networks and is substantially slower.
+
+### Grape-cluster and peduncle segmentation pipeline
+
+CANOPIES also provides a separate polygon for every visible peduncle. The
+peduncle pipeline uses two stages: the generalist detector first finds a grape
+cluster in the complete image; YOLO11s-seg then processes a square region above
+that cluster at higher effective resolution. The output contains the cluster
+box, visible peduncle mask, confidence, and an estimated cutting point. A fully
+occluded peduncle is reported as `NOT_FOUND` rather than being fabricated.
+
+The generated data are split by complete acquisition sequence (60/20/20):
+
+- `data/canopies_peduncle/full`: full images with `grape_cluster` and
+  `peduncle` polygon classes;
+- `data/canopies_peduncle/roi`: cluster-centred crops with high-resolution
+  `peduncle` polygons for the deployed second stage;
+- 593 ROI train images, 345 validation images, and 374 untouched test images;
+- zero invalid/out-of-frame segmentation rows after conversion.
+
+Build and visually validate both representations with:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.build_peduncle_dataset --force
+.\.venv\Scripts\python.exe -m src.validate_segmentation_dataset --data data\canopies_peduncle\roi\dataset.yaml --output results\peduncle_dataset_checks\roi
+.\.venv\Scripts\python.exe -m src.validate_segmentation_dataset --data data\canopies_peduncle\full\dataset.yaml --output results\peduncle_dataset_checks\full
+```
+
+Train, calibrate on validation, and evaluate on the held-out test with:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.train_segmenter --model yolo11s-seg.pt --epochs 80 --batch 12
+.\.venv\Scripts\python.exe -m src.sweep_segmentation_thresholds --split val
+.\.venv\Scripts\python.exe -m src.evaluate_segmenter --split test
+.\.venv\Scripts\python.exe -m src.evaluate_peduncle_pipeline
+```
+
+Previous YOLO11s baseline (sequence-disjoint, confidence `0.35`, IoU `0.50`):
+
+| Evaluation | Precision | Recall | F1 | mAP50 | mAP50-95 |
+|---|---:|---:|---:|---:|---:|
+| Peduncle masks on ground-truth ROIs | 0.637 | 0.521 | 0.573 | 0.582 | 0.175 |
+| Cluster boxes, complete pipeline | 0.683 | 0.727 | 0.705 | - | - |
+| Peduncle masks, complete pipeline | 0.505 | 0.442 | 0.471 | - | - |
+
+The ROI mAP values use Ultralytics' confidence sweep; its P/R/F1 row uses the
+validation-selected operating point. The complete-pipeline evaluation uses
+detector-derived ROIs and therefore includes upstream cluster misses. Batched
+second-stage inference averages 40.8 ms per full image after warm-up on the
+RTX 5060 Laptop GPU.
+
+Run the complete pipeline on an image or folder with:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.peduncle_pipeline --source path\to\vineyard_image.jpg
+```
+
+Or launch its dedicated local interface on port 7861:
+
+```powershell
+.\.venv\Scripts\python.exe app\peduncle_app.py
+```
+
+Annotated images and structured JSON are written to
+`results/peduncle_pipeline/`. The cutting point is a visual estimate on the
+visible mask; safe robotic cutting still requires depth, clearance checking,
+and human or system validation.
+
+### High-accuracy YOLO26m result
+
+The high-accuracy experiment uses COCO-pretrained YOLO26m-seg, full-image and
+cluster-centred multiscale training samples, `mask_ratio=1` for the final ROI
+model, and a zero-extra-latency weight soup of two strong checkpoints. All
+model, resolution, and confidence choices were made on sequence-disjoint
+validation data before one evaluation on test.
+
+| Held-out test evaluation (IoU 0.50) | Precision | Recall | F1 | mAP50 | mAP50-95 |
+|---|---:|---:|---:|---:|---:|
+| Previous YOLO11s peduncle ROI | 0.637 | 0.521 | 0.573 | 0.582 | 0.175 |
+| **YOLO26m peduncle ROI** | **0.718** | **0.571** | **0.636** | **0.658** | **0.202** |
+| Previous two-stage, full image | 0.505 | 0.442 | 0.471 | - | - |
+| **YOLO26m direct, full image** | **0.673** | **0.477** | **0.558** | - | - |
+
+The 2023 CANOPIES paper reports RGB Mask R-CNN overall mAP `0.654` and
+peduncle AP `0.771` at IoU 0.50. Its experiment used 1,326 images and a random
+75/20/5 split; this repository uses the later 810-image public release and a
+stricter sequence-disjoint 60/20/20 split. On this repository's test split the
+new direct model reaches overall mask mAP50 `0.755` and mAP50-95 `0.388`
+(cluster AP50 `0.838`, peduncle AP50 `0.673`). The overall value is numerically
+above the published `0.654`, but the protocols are not directly comparable and
+this is therefore not claimed as a new scientific SOTA. The peduncle-only AP50
+remains below `0.771`.
+
+The direct model also raises full-image cluster F1 from `0.705` to `0.799`
+and runs in 44.3 ms/image after warm-up on the RTX 5060 Laptop GPU. Its
+validation-selected thresholds are `0.40` for clusters and `0.20` for
+peduncles at 960 px. The ROI model uses `0.36` at 640 px. Deployment weights:
+
+- `models/grape_peduncle_yolo26m_multiscale_768_b4_best.pt` (direct, 54.5 MB);
+- `models/grape_peduncle_roi_yolo26m_transfer_mask1_640_b3_best.pt` (ROI, 54.6 MB).
+
+Run the stronger direct path with:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.direct_peduncle_pipeline --source path\to\vineyard_image.jpg
+```
+
+Prediction overlays are in
+`results/peduncle_pipeline/direct_test_c040_p020/samples/` and
+`results/evaluation/peduncle_roi_yolo26m_test_640/prediction_samples/`.
+
+The operational ROI peduncle confidence threshold is `0.36`. It was selected
+on the validation sequences (mask-IoU 0.50), never tuned on the held-out test.
 
 Reproduce the multiscale experiment with:
 
